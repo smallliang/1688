@@ -1,7 +1,9 @@
+# -*- coding:utf-8 -*-
 import re
 import time
 import json
 import multiprocessing as mp
+from multiprocessing import Pool
 import csv
 import codecs
 from selenium import webdriver
@@ -16,6 +18,26 @@ import configparser
 import os
 from lxml import etree
 
+shop_id = {}
+headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
+    }
+chrome_path = os.path.join(os.path.dirname(__file__), 'chromedriver')
+chrome_options = Options()
+chrome_options.add_argument('--headless')
+chrome_options.add_argument('--disable-gpu')
+# 读取配置文件
+cf = configparser.ConfigParser()
+config_path = os.path.join(os.path.dirname(__file__), 'spider.cfg')
+cf.read(config_path, encoding="utf-8-sig")
+class_name = cf.get("class", "class_name")
+trade_num = int(cf.get("class", "trade_num"))
+percent_limit = int(cf.get("class", "percent_limit"))
+A1 = float(cf.get("class", "A1"))
+A2 = float(cf.get("class", "A2"))
+score_limit = int(cf.get("class", "score_limit"))
+
+
 def isElementExist(driver, element):
     flag = True
     browser = driver
@@ -27,8 +49,8 @@ def isElementExist(driver, element):
         flag = False
         return flag
 
-def get_detail_urls(title):
-    driver = webdriver.Chrome(chrome_options=chrome_options)
+def get_detail_urls(title, q):
+    driver = webdriver.Chrome(executable_path=chrome_path, chrome_options=chrome_options)
     start = 'https://m.1688.com/offer_search/-20B7F0C9BDCAD0C5B7B8F3CBB9BCD2BEDFD3D0CFDEB9ABCBBE.html?' \
             'sortType=pop&keywords=' + title
     try:
@@ -83,10 +105,10 @@ def get_detail_urls(title):
                         pass
             divs_len = len(new_divs)
 
-        print(divs_len)
+        # print(divs_len)
         driver.quit()
-    except:
-        pass
+    except Exception as e:
+        print(e)
 
 def crawl(queue_get):
 
@@ -272,10 +294,18 @@ def crawl(queue_get):
             trade_medal_num = len(trade_medal_num[0])
         else:
             trade_medal_num = 0
-        if int(percent.strip('%')) > 10:
-            isPercent = '是'
+        # if int(percent.strip('%')) > 10:
+        #     isPercent = '是'
+        # else:
+        #     isPercent = '否'
+        # 联系方式
+        contact = response.xpath('//div[@class="mod mod-contactSmall app-contactSmall        "]')
+        if contact != []:
+            contact = [' '.join(i.xpath('string(.)').split()) for i in
+                       contact[0].xpath('div[@class="m-body"]/div[@class="m-content"]/dl')]
+            contact = ','.join(contact)
         else:
-            isPercent = '否'
+            contact = ''
         if '质量保障' in sell_verify or '质量保证' in sell_verify:
             zhiliang = '是'
         else:
@@ -318,7 +348,7 @@ def crawl(queue_get):
             page = requests.get(tuwen_url, headers=headers)
             html = re.findall("(?<=desc=')(.*?)(?=';)", page.text)[0]
             response = etree.HTML(html)
-            lis = [i.xpath('string(.)').split()[0] for i in response.xpath('//p') if i.xpath('string(.)').split() != []]
+            lis = [i.xpath('string(.)').split()[0] for i in response.xpath('//span') if i.xpath('string(.)').split() != []]
             tuwen += ','.join(lis)
             tuwen_image_list = [i.strip('\\"') for i in response.xpath('//img/@src') if
                                 i.strip('\\"').startswith('https://cbu01.alicdn.com')]
@@ -328,12 +358,11 @@ def crawl(queue_get):
             page = requests.get(tuwen_url, headers=headers)
             html = re.findall('(?<="content":")(.*?)(?="};)', page.text)[0]
             response = etree.HTML(html)
-            lis = [i.xpath('string(.)').split()[0] for i in response.xpath('//p') if i.xpath('string(.)').split() != []]
+            lis = [i.xpath('string(.)').split()[0] for i in response.xpath('//span') if i.xpath('string(.)').split() != []]
             tuwen += ','.join(lis)
             tuwen_image_list = [i.strip('\\"') for i in response.xpath('//img/@src') if
                                 i.strip('\\"').startswith('https://cbu01.alicdn.com')]
             tuwen += ' '.join(tuwen_image_list)
-        # i = 0
         # for image_url in imageList + tuwen_image_list:
         #     image = requests.get(image_url, headers=headers)
         #     path = os.path.join(os.path.dirname(__file__), id)
@@ -343,18 +372,35 @@ def crawl(queue_get):
         #     fp.write(image.content)
         #     # print position+each
         #     fp.close()
-        #     i += 1
         # 计算分数
-        if saledCount == 0 or trade_medal_num<2 or isPercent == '否':
+        if saledCount == 0 or trade_medal_num < 2 or int(percent.strip('%')) < percent_limit:
             score = 0
         else:
             score = (trade_medal_num/5) * (100*A1) + (int(percent.strip('%'))/100) * (100*A2)
+        if score > score_limit:
+            print('正在下载%s图片' % id)
+            i = 0
+            for image_url in imageList + tuwen_image_list:
+                image = requests.get(image_url, headers=headers)
+                dir_path = os.path.join(os.path.dirname(__file__), title)
+                if not os.path.isdir(dir_path):
+                    os.makedirs(dir_path)
+                file_path = subjectName + '/' + id
+                file_path = os.path.join(os.path.dirname(__file__), file_path)
+                if not os.path.isdir(file_path):
+                    os.makedirs(file_path)
+                fp = open(file_path + '/' + str(i) + '.jpg', 'wb')
+                fp.write(image.content)
+                # print position+each
+                fp.close()
+                i += 1
         # 商品序号
         shopNum = class_name + '.' + title + '.' + id
                   # ("00000%s" % str(count))[-6:]
-        return [shopNum, subjectName, url, detail_info, tuwen, kezhong, price, begin, guige, canBookCount, saledCount,
-                fahuo, baohuan, maijia, baotui, caizhi, jiaoqi, posun, shezhang, companyName, str(trade_medal_num), isPercent,
-                zhiliang, fahuobaozhang, huanhuo, shendu, qiye, chengxin, supply_mode, location, str(score)]
+        return [title, shopNum, subjectName, url, detail_info, tuwen, kezhong, price, begin, guige, canBookCount,
+                saledCount, fahuo, baohuan, maijia, baotui, caizhi, jiaoqi, posun, shezhang, companyName,
+                str(trade_medal_num), percent, zhiliang, fahuobaozhang, huanhuo, shendu, qiye, chengxin, supply_mode,
+                location, contact, str(score)]
 
 
     except Exception as e:
@@ -367,36 +413,19 @@ def mycallback(x):
     if x != None:
         csv_write.writerow(x)
 
+
 if __name__=='__main__':
-    shop_id = {}
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows; U; Windows NT 6.1; en-US; rv:1.9.1.6) Gecko/20091201 Firefox/3.5.6'
-    }
-
-    chrome_options = Options()
-    chrome_options.add_argument('--headless')
-    chrome_options.add_argument('--disable-gpu')
-    # 读取配置文件
-    cf = configparser.ConfigParser()
-    config_path = os.path.join(os.path.dirname(__file__), 'spider.cfg')
-    cf.read(config_path)
-    class_name = cf.get("class", "class_name")
-    A1 = 0.5
-    A2 = 0.5
-    # 创建csv文件
-    file_name = '%s.csv' % class_name
-    csv_file = codecs.open(file_name, 'w+', 'utf_8_sig')
-    csv_write = csv.writer(csv_file)
-    csv_write.writerow(['序号', '商品名称', '商品链接', '详细信息', '商品描述', '克重', '现货价格（最小起批量的价格）',
-                        '最小起批量', '规格/型号', '可售数量(>5)', '30天成交数量', '48小时发货', '15天包换', '买家保障',
-                        '8天无理由包退（仅向淘货源买家提供）', '材质保障', '交期保障', '破损补寄', '免费赊账', '商家名称',
-                        '交易勋章(>=2)', '回头率（>10%）', '质量保障', '发货保障', '换货保障', '深度验厂', '企业身份认证',
-                        '诚信', '经营模式', '所在地区', '分数'])
-
-    # 创建多进程公用队列
+    mp.freeze_support()
     manager = mp.Manager()
     q = manager.Queue()
-    driver = webdriver.Chrome(chrome_options=chrome_options)
+    # 创建多进程公用队列
+
+
+
+
+
+
+    driver = webdriver.Chrome(executable_path=chrome_path, chrome_options=chrome_options)
     now = time.time()
     driver.get("https://www.1688.com")
     element = WebDriverWait(driver, 10).until(
@@ -425,21 +454,36 @@ if __name__=='__main__':
     print(len(class_list), '个小类')
     driver.quit()
 
+    # test()
     cpu_count = mp.cpu_count()
+    print(class_list)
     for i in range(0, len(class_list), cpu_count):
-    # 开启多进程
-    # 先爬小类中的链接
-        pool1 = mp.Pool(processes=cpu_count)
-        pool1.map_async(func=get_detail_urls, iterable=class_list[i:i+cpu_count])
+        # 开启多进程
+        # 先爬小类中的链接
+        # 创建csv文件
+        file_name = '%s.csv' % (class_name+'-'+','.join(class_list[i:i+cpu_count]))
+        csv_file = codecs.open(file_name, 'w+', 'utf_8_sig')
+        csv_write = csv.writer(csv_file)
+        csv_write.writerow(['小类名称', '序号', '商品名称', '商品链接', '详细信息', '商品描述', '克重', '现货价格',
+                            '最小起批量', '规格/型号', '可售数量(>5)', '30天成交数量', '48小时发货', '15天包换', '买家保障',
+                            '8天无理由包退（仅向淘货源买家提供）', '材质保障', '交期保障', '破损补寄', '免费赊账', '商家名称',
+                            '交易勋章', '回头率', '质量保障', '发货保障', '换货保障', '深度验厂', '企业身份认证',
+                            '诚信', '经营模式', '所在地区', '联系方式', '分数'])
+        pool1 = Pool(processes=cpu_count)
+        for j in class_list[i:i+cpu_count]:
+            pool1.apply_async(get_detail_urls, args=(j, q,))
+        # pool1.map_async(func=get_detail_urls, iterable=class_list[i:i + cpu_count])
         pool1.close()
         pool1.join()
+        #     get_detail_urls(class_list[i])
         # 再爬具体信息
-        pool2 = mp.Pool(processes=cpu_count)
+        print('正在爬取：%s' % ','.join(class_list[i:i + cpu_count]))
+        pool2 = Pool(processes=cpu_count)
         while not q.empty():
-            pool2.apply_async(crawl, (q.get(),), callback=mycallback)
+            pool2.apply_async(crawl, args=(q.get(),), callback=mycallback)
         pool2.close()
         pool2.join()
 
-    csv_file.close()
+        csv_file.close()
     print(time.time()-now)
 
